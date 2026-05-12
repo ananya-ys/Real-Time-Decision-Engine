@@ -1,0 +1,192 @@
+##############################################################################
+# RTDE — Production Docker Compose
+#
+# This is NOT a replacement for Kubernetes in large-scale production.
+# It is the correct deployment target for:
+#   - Single-machine / VPS deployments
+#   - Railway "docker-compose" deployments
+#   - Self-hosted staging environments
+#
+# Differences from docker-compose.yml (dev):
+#   - No port exposure on postgres/redis (no external access)
+#   - Resource limits on all services
+#   - Restart: always (not unless-stopped)
+#   - No db_echo (no SQL query logging)
+#   - workers=4 for API (multi-core)
+#   - read-only filesystem for app containers where possible
+#   - Network isolation: only app exposes port 8000
+##############################################################################
+
+services:
+  # ── PostgreSQL 16 ──────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rtde_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-rtde_db}
+    # No port exposure — only accessible within docker network
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - rtde_internal
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U ${POSTGRES_USER:-rtde_user} -d ${POSTGRES_DB:-rtde_db}"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Redis 7 ────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:-}
+    volumes:
+      - redisdata:/data
+    networks:
+      - rtde_internal
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 300M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI Application ────────────────────────────────────────
+  app:
+    image: ${IMAGE_NAME:-rtde-backend}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      target: runtime
+    restart: always
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-rtde_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rtde_db}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-}@redis:6379/2
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in production}
+      LOG_LEVEL: INFO
+      DB_ECHO: "false"
+      DB_POOL_SIZE: "10"
+    networks:
+      - rtde_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # Run migrations on startup before accepting traffic
+    # NOTE: --worker-class is a Gunicorn flag, NOT uvicorn.
+    # Multi-worker production requires gunicorn as the process manager.
+    # gunicorn.conf.py in the repo root configures workers, timeouts, etc.
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        gunicorn app.main:app
+          --config gunicorn.conf.py
+          --worker-class uvicorn.workers.UvicornWorker
+          --workers 4
+          --bind 0.0.0.0:8000
+      "
+
+  # ── Celery Worker ──────────────────────────────────────────────
+  celery-worker:
+    image: ${IMAGE_NAME:-rtde-backend}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      target: runtime
+    restart: always
+    command: >
+      celery -A app.worker.celery_app worker
+        --loglevel=info
+        --concurrency=2
+        --queues=celery,drift_eval
+        --max-tasks-per-child=500
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-rtde_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rtde_db}
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-}@redis:6379/2
+      LOG_LEVEL: INFO
+    networks:
+      - rtde_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G  # RL training is memory-intensive
+
+  # ── Celery Beat ────────────────────────────────────────────────
+  celery-beat:
+    image: ${IMAGE_NAME:-rtde-backend}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      target: runtime
+    restart: always
+    command: >
+      celery -A app.worker.celery_app beat
+        --loglevel=info
+        --scheduler celery.beat.PersistentScheduler
+    environment:
+      APP_ENV: production
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-}@redis:6379/2
+    networks:
+      - rtde_internal
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+
+networks:
+  rtde_internal:
+    driver: bridge
+    internal: false  # app needs internet for external API calls if any

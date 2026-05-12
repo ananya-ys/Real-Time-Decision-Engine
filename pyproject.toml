@@ -1,0 +1,82 @@
+[project]
+name = "rtde-backend"
+version = "0.1.0"
+description = "RTDE - Real-Time Decision Engine for Dynamic Resource Allocation"
+requires-python = ">=3.12"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",   # line length handled by formatter
+    "B008",   # Depends() in function defaults is standard FastAPI pattern
+    "TC002", # moving third-party imports to TYPE_CHECKING breaks FastAPI Depends
+    "TC003",
+    "TC001", # moving app imports to TYPE_CHECKING blocks breaks runtime usage
+    "RUF002", # Greek letters in docstrings are math notation, not typos
+    "RUF012", # ClassVar annotation not needed for pytest class constants
+    "SIM102", # Nested if is sometimes more readable
+    "RUF005",  # List concatenation is fine for small lists
+    "UP042", # str+Enum needed for SQLAlchemy Enum column type compatibility # moving stdlib imports to TYPE_CHECKING blocks — not needed for this project
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["celery.*", "redis.*", "prometheus_client.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning", "ignore::RuntimeWarning"]
+markers = [
+    "unit: Unit tests (no DB, no Redis)",
+    "integration: Integration tests (real DB + Redis)",
+    "concurrency: Concurrency stress tests",
+    "chaos: Chaos injection tests",
+    "benchmark: Multi-seed benchmark tests",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "app/simulation/*",
+    "alembic/*",
+    "tests/*",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ ==",
+]

@@ -1,0 +1,35 @@
+# ══════════════════════════════════════════════════════════════════
+# STAGE 1: Builder
+# ══════════════════════════════════════════════════════════════════
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ══════════════════════════════════════════════════════════════════
+# STAGE 2: Worker Runtime
+# ══════════════════════════════════════════════════════════════════
+FROM python:3.12-slim AS worker
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r rtde && useradd -r -g rtde -u 1000 -m rtde
+
+COPY --from=builder /install /usr/local
+
+WORKDIR /app
+COPY --chown=rtde:rtde . .
+
+USER rtde
+
+# Default: Celery worker. Override CMD for beat.
+CMD ["celery", "-A", "app.worker.celery_app", "worker", \
+     "--loglevel=info", "--concurrency=2"]

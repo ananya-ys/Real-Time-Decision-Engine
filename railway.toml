@@ -1,0 +1,27 @@
+# Railway Deployment Configuration
+# Docs: https://docs.railway.app/reference/config-as-code
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "./Dockerfile"
+
+[deploy]
+startCommand = "python scripts/wait_for_db.py && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# ── Required Environment Variables ─────────────────────────────
+# Set these in Railway dashboard under "Variables":
+#
+# SECRET_KEY          = <openssl rand -hex 32>
+# DATABASE_URL        = postgresql+asyncpg://user:pass@host:5432/db
+#                       (Railway PostgreSQL plugin provides DATABASE_URL,
+#                        prepend "+asyncpg" after "postgresql")
+# REDIS_URL           = redis://user:pass@host:port/0
+#                       (Railway Redis plugin provides REDIS_URL)
+# CELERY_BROKER_URL   = redis://user:pass@host:port/1
+# CELERY_RESULT_BACKEND = redis://user:pass@host:port/2
+# APP_ENV             = production
+# LOG_LEVEL           = INFO

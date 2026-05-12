@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>RTDE — Xenon Control v3</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body,#root{height:100%;}
+input[type=range]{-webkit-appearance:none;appearance:none;height:4px;border-radius:2px;outline:none;cursor:pointer;}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;cursor:pointer;}
+::-webkit-scrollbar{width:4px;height:4px;}
+::-webkit-scrollbar-thumb{border-radius:2px;}
+@keyframes xpulse{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes xscan{0%{transform:translateX(-200%)}100%{transform:translateX(800%)}}
+@keyframes xfade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes xslide{from{transform:translateX(20px);opacity:0}to{transform:translateX(0);opacity:1}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useEffect,useRef,useCallback,useMemo,useContext,createContext}=React;
+
+/* ── Theme ────────────────────────────────────────────────── */
+const D={
+  dark:{bg:'#050A14',bg2:'#0B1525',bg3:'#101E38',bg4:'#07101E',border:'#182B48',borderHi:'#223E66',
+    text:'#C8E4FF',textMuted:'#3E6080',textDim:'#162840',
+    blue:'#00C8FF',amber:'#FFB800',green:'#00FF88',red:'#FF3355',purple:'#AA44FF',cyan:'#00FFDD',
+    gradient:'linear-gradient(135deg,#050A14 0%,#0A1830 100%)'},
+  light:{bg:'#EEF3FD',bg2:'#FFFFFF',bg3:'#F2F6FF',bg4:'#E8EEF8',border:'#D0DAF0',borderHi:'#B4C4E0',
+    text:'#08162E',textMuted:'#4A6080',textDim:'#A8BBC8',
+    blue:'#0055AA',amber:'#AA6600',green:'#006644',red:'#BB0033',purple:'#6022BB',cyan:'#007A80',
+    gradient:'linear-gradient(135deg,#EEF3FD 0%,#E4EDFF 100%)'},
+};
+
+/* ── API Client ────────────────────────────────────────────── */
+const makeApi=(base)=>({
+  async get(p){try{const r=await fetch(base+p,{signal:AbortSignal.timeout(8000)});return r.ok?await r.json():{error:`${r.status} ${r.statusText}`};}catch(e){return{error:e.message};}},
+  async post(p,b={}){try{const r=await fetch(base+p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b),signal:AbortSignal.timeout(15000)});const d=await r.json();return r.ok?d:{error:d.detail||d.message||`${r.status}`,detail:d.detail,...d};}catch(e){return{error:e.message};}},
+});
+
+/* ── Auth Context ──────────────────────────────────────────── */
+const AuthCtx=createContext(null);
+
+/* ── Atoms ─────────────────────────────────────────────────── */
+const PulseDot=({color,size=8})=><span style={{display:'inline-block',width:size,height:size,borderRadius:'50%',background:color,animation:'xpulse 2s ease-in-out infinite',boxShadow:`0 0 6px ${color}66`,flexShrink:0}}/>;
+
+const Badge=({label,color})=><span style={{padding:'2px 8px',fontSize:10,fontFamily:'Space Mono,monospace',letterSpacing:'0.08em',background:`${color}1A`,color,border:`1px solid ${color}44`,whiteSpace:'nowrap'}}>{label}</span>;
+
+const MetricCard=({label,value,sub,accent,t})=>(
+  <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:'18px 20px',position:'relative',overflow:'hidden'}}>
+    <div style={{position:'absolute',top:0,left:0,right:0,height:2,background:accent}}/>
+    <div style={{fontSize:10,color:t.textMuted,letterSpacing:'0.12em',textTransform:'uppercase',marginBottom:8,fontFamily:'Space Mono,monospace'}}>{label}</div>
+    <div style={{fontSize:26,fontFamily:'Space Mono,monospace',fontWeight:700,color:t.text,lineHeight:1}}>{value}</div>
+    {sub&&<div style={{fontSize:10,color:t.textMuted,marginTop:5,fontFamily:'Space Mono,monospace'}}>{sub}</div>}
+  </div>
+);
+
+const SectionHead=({label,t,color})=>(
+  <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+    <div style={{width:3,height:14,background:color||t.blue,flexShrink:0}}/>
+    <span style={{fontSize:10,letterSpacing:'0.14em',textTransform:'uppercase',color:t.textMuted,fontFamily:'Space Mono,monospace'}}>{label}</span>
+  </div>
+);
+
+const Signal=({value,max=100,color,label,t})=>{
+  const pct=Math.min(100,Math.max(0,(value/max)*100));
+  return(
+    <div style={{marginBottom:10}}>
+      <div style={{display:'flex',justifyContent:'space-between',marginBottom:3,fontSize:10,fontFamily:'Space Mono,monospace'}}>
+        <span style={{color:t.textMuted}}>{label}</span>
+        <span style={{color:t.text}}>{typeof value==='number'?value.toFixed(1):value}</span>
+      </div>
+      <div style={{height:3,background:t.bg3,borderRadius:2}}>
+        <div style={{height:'100%',width:`${pct}%`,background:color,borderRadius:2,transition:'width 0.6s ease'}}/>
+      </div>
+    </div>
+  );
+};
+
+const Toggle=({on,onChange,colorOn,t})=>(
+  <button onClick={()=>onChange(!on)} style={{width:42,height:22,borderRadius:11,background:on?(colorOn||t.blue):t.border,border:'none',cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}>
+    <span style={{position:'absolute',top:2,left:on?20:2,width:18,height:18,borderRadius:'50%',background:on?t.bg:t.textMuted,transition:'left 0.2s',display:'block'}}/>
+  </button>
+);
+
+const XBtn=({onClick,children,color,t,small,disabled,full,danger})=>{
+  const[hov,setHov]=useState(false);
+  const c=danger?t.red:(color||t.blue);
+  return(
+    <button onClick={onClick} disabled={disabled}
+      onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+      style={{background:hov&&!disabled?`${c}20`:'transparent',border:`1px solid ${hov&&!disabled?c:t.border}`,color:hov&&!disabled?c:t.textMuted,cursor:disabled?'not-allowed':'pointer',padding:small?'5px 12px':'9px 18px',fontSize:small?10:11,letterSpacing:'0.06em',fontFamily:'Space Mono,monospace',transition:'all 0.15s',opacity:disabled?.5:1,width:full?'100%':undefined}}>
+      {children}
+    </button>
+  );
+};
+
+const XInput=({value,onChange,placeholder,t,mono=true})=>(
+  <input value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+    style={{width:'100%',background:t.bg3,border:`1px solid ${t.border}`,color:t.text,padding:'9px 14px',fontFamily:mono?'Space Mono,monospace':'Syne,sans-serif',fontSize:11,outline:'none',boxSizing:'border-box'}}
+    onFocus={e=>e.target.style.borderColor=t.blue}
+    onBlur={e=>e.target.style.borderColor=t.border}/>
+);
+
+const Msg=({msg,t})=>{if(!msg)return null;const ok=msg.startsWith('✓');return(
+  <div style={{marginTop:10,padding:'8px 12px',fontSize:11,fontFamily:'Space Mono,monospace',background:ok?`${t.green}12`:`${t.red}12`,border:`1px solid ${ok?t.green:t.red}44`,color:ok?t.green:t.red}}>{msg}</div>
+);};
+
+/* ── Typed Confirmation Modal ──────────────────────────────── */
+function ConfirmModal({action,challenge,onConfirm,onCancel,t,api}){
+  const[typed,setTyped]=useState('');
+  const[loading,setLoading]=useState(false);
+  const[err,setErr]=useState('');
+  const[token,setToken]=useState('');
+  const blastTexts={
+    KILL_SWITCH_GLOBAL:'ALL ML policies will be disabled. 100% traffic falls back to baseline immediately.',
+    MAINTENANCE_ENTER:'Baseline forced + exploration frozen + promotion frozen until manually exited.',
+    FORCE_BASELINE:'All traffic routed to baseline. ML training continues in background.',
+    FREEZE_EXPLORATION:'Exploration suppressed system-wide. Policies exploit only.',
+    CANARY_ABORT:'Canary traffic immediately returns to 0%. Active policy unchanged.',
+    POLICY_RETIRE:'Policy version permanently retired. This cannot be undone.',
+  };
+
+  useEffect(()=>{
+    api.post('/api/v1/approvals/confirm/challenge',{action,reason:'User-initiated from UI'}).then(r=>{
+      if(!r.error) setToken(r.confirmation_token||'');
+    });
+  },[action]);
+
+  const blast=blastTexts[action]||'This action will affect live traffic.';
+  const isCorrect=typed.trim()===challenge;
+
+  const submit=async()=>{
+    if(!isCorrect){setErr('Challenge string does not match. Type it exactly.');return;}
+    setLoading(true);setErr('');
+    const r=await api.post('/api/v1/approvals/confirm/validate',{token,typed_string:typed.trim()});
+    if(r.error){setErr(r.error);setLoading(false);return;}
+    onConfirm(r);setLoading(false);
+  };
+
+  return(
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000}}>
+      <div style={{background:t.bg2,border:`2px solid ${t.red}`,maxWidth:520,width:'90%',padding:32,animation:'xfade 0.2s ease'}}>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20}}>
+          <PulseDot color={t.red} size={10}/>
+          <div style={{fontSize:13,fontWeight:700,color:t.red,fontFamily:'Space Mono,monospace',letterSpacing:'0.05em'}}>CONFIRMATION REQUIRED</div>
+        </div>
+
+        <div style={{background:`${t.red}12`,border:`1px solid ${t.red}33`,padding:14,marginBottom:20,fontSize:11,color:t.red,fontFamily:'Space Mono,monospace',lineHeight:1.6}}>
+          <strong>BLAST RADIUS:</strong> {blast}
+        </div>
+
+        <div style={{fontSize:11,color:t.textMuted,marginBottom:16,fontFamily:'Space Mono,monospace',lineHeight:1.6}}>
+          To confirm this action, type the following string exactly (case-sensitive):
+        </div>
+
+        <div style={{background:t.bg3,border:`1px solid ${t.borderHi}`,padding:12,marginBottom:16,fontFamily:'Space Mono,monospace',fontSize:14,color:t.amber,letterSpacing:'0.08em'}}>
+          {challenge}
+        </div>
+
+        <XInput value={typed} onChange={setTyped} placeholder="Type the challenge string..." t={t}/>
+
+        {err&&<div style={{marginTop:8,fontSize:11,color:t.red,fontFamily:'Space Mono,monospace'}}>{err}</div>}
+
+        <div style={{display:'flex',gap:10,marginTop:20}}>
+          <XBtn onClick={onCancel} t={t} full>CANCEL</XBtn>
+          <XBtn onClick={submit} t={t} color={t.red} full disabled={!isCorrect||loading}>
+            {loading?'VALIDATING...':'EXECUTE ACTION'}
+          </XBtn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Login Screen ──────────────────────────────────────────── */
+function LoginScreen({onLogin,t,api}){
+  const[user,setUser]=useState('operator@rtde.ai');
+  const[pass,setPass]=useState('');
+  const[role,setRole]=useState('operator');
+  const[loading,setLoading]=useState(false);
+  const[err,setErr]=useState('');
+
+  const login=async()=>{
+    if(!user.trim()){setErr('Username required');return;}
+    setLoading(true);setErr('');
+    const r=await api.post('/api/v1/auth/token',{username:user,password:pass||'dev',role});
+    if(r.error||!r.access_token){
+      setErr(r.error||r.detail||'Login failed');setLoading(false);return;
+    }
+    onLogin({token:r.access_token,role:r.role||role,user_id:user});
+    setLoading(false);
+  };
+
+  const roles=['viewer','operator','admin'];
+  const roleDesc={viewer:'Read-only access to all dashboards',operator:'Full control + operator commands',admin:'Promotion approval + RBAC management'};
+
+  return(
+    <div style={{minHeight:'100vh',background:t.gradient,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:"'Syne',sans-serif"}}>
+      <style>{`
+        @keyframes xpulse{0%,100%{opacity:1}50%{opacity:.3}}
+        @keyframes xfade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+        input:focus{border-color:${t.blue}!important;outline:none;}
+        ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-thumb{background:${t.border};border-radius:2px;}
+      `}</style>
+
+      <div style={{width:440,animation:'xfade 0.4s ease'}}>
+        {/* Logo */}
+        <div style={{textAlign:'center',marginBottom:40}}>
+          <div style={{fontSize:42,fontWeight:800,color:t.blue,letterSpacing:'0.04em',lineHeight:1}}>RTDE</div>
+          <div style={{fontSize:10,color:t.textMuted,letterSpacing:'0.25em',marginTop:6,fontFamily:'Space Mono,monospace'}}>XENON CONTROL SYSTEM</div>
+          <div style={{width:60,height:2,background:t.blue,margin:'16px auto 0'}}/>
+        </div>
+
+        <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:32}}>
+          <div style={{marginBottom:20}}>
+            <label style={{fontSize:10,color:t.textMuted,letterSpacing:'0.12em',fontFamily:'Space Mono,monospace',display:'block',marginBottom:6}}>OPERATOR ID</label>
+            <XInput value={user} onChange={setUser} placeholder="operator@rtde.ai" t={t}/>
+          </div>
+
+          <div style={{marginBottom:20}}>
+            <label style={{fontSize:10,color:t.textMuted,letterSpacing:'0.12em',fontFamily:'Space Mono,monospace',display:'block',marginBottom:6}}>ROLE</label>
+            <div style={{display:'flex',gap:8}}>
+              {roles.map(r=>(
+                <button key={r} onClick={()=>setRole(r)} style={{flex:1,padding:'8px 4px',background:role===r?`${t.blue}20`:'transparent',border:`1px solid ${role===r?t.blue:t.border}`,color:role===r?t.blue:t.textMuted,fontSize:10,fontFamily:'Space Mono,monospace',cursor:'pointer',letterSpacing:'0.05em',transition:'all 0.15s'}}>
+                  {r.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            <div style={{fontSize:10,color:t.textDim,fontFamily:'Space Mono,monospace',marginTop:8}}>{roleDesc[role]}</div>
+          </div>
+
+          {err&&<div style={{marginBottom:14,fontSize:11,color:t.red,fontFamily:'Space Mono,monospace',padding:'8px 12px',background:`${t.red}12`,border:`1px solid ${t.red}33`}}>{err}</div>}
+
+          <XBtn onClick={login} t={t} color={t.blue} full disabled={loading}>
+            {loading?'AUTHENTICATING...':'→ AUTHENTICATE'}
+          </XBtn>
+
+          <div style={{marginTop:16,fontSize:10,color:t.textDim,fontFamily:'Space Mono,monospace',textAlign:'center',lineHeight:1.6}}>
+            Dev mode: any username accepted.<br/>Password ignored in development environment.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Dashboard Panel ───────────────────────────────────────── */
+function PanelDashboard({t,api}){
+  const[dash,setDash]=useState(null);
+  const[decisions,setDecisions]=useState([]);
+  const wsRef=useRef(null);
+
+  // WebSocket for live decisions
+  useEffect(()=>{
+    const wsUrl=(window.RTDE_API_URL||'http://localhost:8000').replace(/^http/,'ws');
+    try{
+      const ws=new WebSocket(`${wsUrl}/ws/decisions`);
+      ws.onmessage=e=>{
+        const d=JSON.parse(e.data);
+        if(d.type==='decision') setDecisions(p=>[d,...p].slice(0,10));
+      };
+      ws.onerror=()=>{};
+      wsRef.current=ws;
+    }catch(e){}
+    return()=>{if(wsRef.current)wsRef.current.close();};
+  },[]);
+
+  // Poll dashboard
+  useEffect(()=>{
+    const load=async()=>{const d=await api.get('/api/v1/monitoring/dashboard');if(!d.error)setDash(d);};
+    load();const iv=setInterval(load,5000);return()=>clearInterval(iv);
+  },[]);
+
+  const AC={SCALE_UP_3:t.green,SCALE_UP_1:'#88EE44',HOLD:t.blue,SCALE_DOWN_1:t.amber,SCALE_DOWN_3:t.red};
+  const d1h=dash?.decisions_1h||{};
+  const ap=dash?.active_policy||{};
+  const slo=dash?.slo_status||{};
+
+  return(
+    <div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:24}}>
+        <MetricCard label="Decisions / Hour" value={d1h.total??'—'} accent={t.blue} t={t}/>
+        <MetricCard label="Avg Latency" value={d1h.avg_latency_ms?`${d1h.avg_latency_ms.toFixed(0)}ms`:'—'} accent={t.amber} t={t} sub={d1h.avg_latency_ms>300?'⚠ SLO breach':'Within target'}/>
+        <MetricCard label="Fallback Rate" value={d1h.fallback_rate!=null?`${(d1h.fallback_rate*100).toFixed(1)}%`:'—'} accent={t.red} t={t}/>
+        <MetricCard label="SLO Status" value={slo.slo_healthy?'PASSING':'BREACHED'} accent={slo.slo_healthy?t.green:t.red} t={t} sub={`${((slo.slo_breach_rate_1h||0)*100).toFixed(1)}% breach rate`}/>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1.5fr',gap:16}}>
+        <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:20}}>
+          <SectionHead label="Active Policy" t={t}/>
+          <div style={{fontFamily:'Space Mono,monospace'}}>
+            <div style={{fontSize:28,color:t.blue,fontWeight:700,marginBottom:6}}>{ap.policy_type||'BASELINE'}</div>
+            <div style={{fontSize:11,color:t.textMuted}}>v{ap.version??'—'} · {ap.algorithm??'threshold_v1'}</div>
+            {ap.eval_reward_mean!=null&&<div style={{fontSize:11,color:t.textMuted,marginTop:4}}>Reward μ: {ap.eval_reward_mean.toFixed(4)}</div>}
+            <div style={{marginTop:12,display:'flex',alignItems:'center',gap:8}}>
+              <PulseDot color={dash?.system_status==='healthy'?t.green:t.amber}/>
+              <Badge label={(dash?.system_status||'UNKNOWN').toUpperCase()} color={dash?.system_status==='healthy'?t.green:t.amber}/>
+            </div>
+          </div>
+        </div>
+
+        <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:20}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:16}}>
+            <div style={{width:3,height:14,background:t.green}}/>
+            <span style={{fontSize:10,letterSpacing:'0.14em',textTransform:'uppercase',color:t.textMuted,fontFamily:'Space Mono,monospace'}}>Live Decision Stream</span>
+            <PulseDot color={t.green} size={6}/>
+            <span style={{fontSize:9,color:t.textDim,fontFamily:'Space Mono,monospace'}}>WebSocket</span>
+          </div>
+          <div style={{maxHeight:220,overflowY:'auto'}}>
+            {decisions.length===0&&<div style={{color:t.textDim,fontSize:11,fontFamily:'Space Mono,monospace',paddingTop:20,textAlign:'center'}}>Awaiting decisions via WebSocket...</div>}
+            {decisions.map((d,i)=>(
+              <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'5px 0',borderBottom:`1px solid ${t.border}1A`,fontFamily:'Space Mono,monospace',fontSize:11,animation:'xslide 0.3s ease'}}>
+                <span style={{color:t.textDim,fontSize:10,minWidth:52}}>{new Date(d.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
+                <span style={{color:AC[d.action]||t.textMuted,minWidth:96,fontWeight:700}}>{d.action}</span>
+                <span style={{color:t.textMuted,minWidth:60,fontSize:10}}>{d.policy_type}</span>
+                {d.latency_ms!=null&&<span style={{color:t.textDim,fontSize:10}}>{d.latency_ms.toFixed(0)}ms</span>}
+                {d.fallback&&<Badge label="FALLBACK" color={t.red}/>}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Decision Lab with Explainability ─────────────────────── */
+function PanelDecisionLab({t,api}){
+  const{role}=useContext(AuthCtx)||{role:'viewer'};
+  const[s,setS]=useState({cpu_utilization:0.65,request_rate:1500,p99_latency_ms:220,instance_count:5});
+  const[res,setRes]=useState(null);
+  const[explain,setExplain]=useState(null);
+  const[loading,setLoading]=useState(false);
+  const[reward,setReward]=useState({id:'',value:-1.0});
+  const[rmsg,setRmsg]=useState('');
+  const[tab,setTab]=useState('result');
+
+  const decide=async()=>{
+    setLoading(true);setExplain(null);
+    const r=await api.post('/api/v1/decision',{state:s});
+    setRes(r);
+    if(r.trace_id) setReward(p=>({...p,id:r.trace_id}));
+    // Fetch explanation
+    if(!r.error){
+      const ex=await api.post('/api/v1/explain/decision',{
+        state:s,chosen_action:r.action,q_values:r.q_values,
+        explore_allowed:!r.fallback_used,policy_type:r.policy_type||'BASELINE'
+      });
+      if(!ex.error) setExplain(ex);
+    }
+    setLoading(false);
+  };
+
+  const submitReward=async()=>{
+    if(!reward.id){setRmsg('No decision ID');return;}
+    const r=await api.post('/api/v1/rewards',{decision_log_id:reward.id,reward:reward.value});
+    setRmsg(r.error?`Error: ${r.error}`:'✓ Reward submitted');
+  };
+
+  const AC={SCALE_UP_3:t.green,SCALE_UP_1:'#88EE44',HOLD:t.blue,SCALE_DOWN_1:t.amber,SCALE_DOWN_3:t.red};
+  const Row=({label,field,min,max,step=0.01,fmt})=>(
+    <div style={{marginBottom:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',fontSize:10,marginBottom:4,fontFamily:'Space Mono,monospace'}}>
+        <span style={{color:t.textMuted}}>{label}</span>
+        <span style={{color:t.text}}>{fmt?fmt(s[field]):s[field]}</span>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={s[field]} onChange={e=>setS(p=>({...p,[field]:parseFloat(e.target.value)}))} style={{width:'100%',accentColor:t.blue}}/>
+    </div>
+  );
+
+  const ConfLevel={HIGH:t.green,MEDIUM:t.amber,LOW:t.red,unknown:t.textMuted};
+
+  return(
+    <div style={{display:'grid',gridTemplateColumns:'320px 1fr',gap:16}}>
+      {/* Input */}
+      <div>
+        <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:20,marginBottom:12}}>
+          <SectionHead label="System State" t={t}/>
+          <Row label="CPU Utilization" field="cpu_utilization" min={0} max={1} step={0.01} fmt={v=>`${(v*100).toFixed(0)}%`}/>
+          <Row label="Request Rate (RPS)" field="request_rate" min={100} max={10000} step={50} fmt={v=>`${v.toFixed(0)}`}/>
+          <Row label="P99 Latency (ms)" field="p99_latency_ms" min={50} max={1000} step={10} fmt={v=>`${v.toFixed(0)}ms`}/>
+          <Row label="Instance Count" field="instance_count" min={1} max={20} step={1} fmt={v=>v}/>
+          <XBtn onClick={decide} t={t} color={t.green} full disabled={loading||role==='viewer'}>
+            {loading?'DECIDING...':'→ MAKE DECISION'}
+          </XBtn>
+          {role==='viewer'&&<div style={{fontSize:10,color:t.textDim,fontFamily:'Space Mono,monospace',marginTop:6,textAlign:'center'}}>Viewer role cannot make decisions</div>}
+        </div>
+
+        {/* Reward */}
+        <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:16}}>
+          <SectionHead label="Submit Reward" t={t} color={t.amber}/>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:10,fontFamily:'Space Mono,monospace',marginBottom:4}}>
+            <span style={{color:t.textMuted}}>Reward</span>
+            <span style={{color:reward.value<0?t.red:t.green}}>{reward.value.toFixed(1)}</span>
+          </div>
+          <input type="range" min={-10} max={2} step={0.1} value={reward.value} onChange={e=>setReward(p=>({...p,value:parseFloat(e.target.value)}))} style={{width:'100%',accentColor:reward.value<0?t.red:t.green,marginBottom:10}}/>
+          <XBtn onClick={submitReward} t={t} color={t.amber} small>SUBMIT</XBtn>
+          {rmsg&&<span style={{marginLeft:8,fontSize:10,color:t.green,fontFamily:'Space Mono,monospace'}}>{rmsg}</span>}
+        </div>
+      </div>
+
+      {/* Output with tabs */}
+      <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:20}}>
+        {/* Tabs */}
+        <div style={{display:'flex',gap:0,marginBottom:20,borderBottom:`1px solid ${t.border}`}}>
+          {['result','explain','alternatives'].map(tb=>(
+            <button key={tb} onClick={()=>setTab(tb)} style={{padding:'8px 16px',background:'transparent',border:'none',borderBottom:`2px solid ${tab===tb?t.blue:'transparent'}`,color:tab===tb?t.blue:t.textMuted,cursor:'pointer',fontSize:10,fontFamily:'Space Mono,monospace',letterSpacing:'0.08em',textTransform:'uppercase',transition:'all 0.15s'}}>{tb}</button>
+          ))}
+        </div>
+
+        {tab==='result'&&(!res?
+          <div style={{color:t.textDim,fontSize:11,fontFamily:'Space Mono,monospace',paddingTop:20}}>Submit a state to receive a decision.</div>:
+          <div style={{animation:'xfade 0.3s ease',fontFamily:'Space Mono,monospace'}}>
+            {res.error?
+              <div style={{color:t.red,fontSize:11}}>{res.error}<br/>{res.detail}</div>:
+              <>
+                <div style={{fontSize:34,color:AC[res.action]||t.text,fontWeight:700,marginBottom:8}}>{res.action}</div>
+                <div style={{fontSize:11,color:t.textMuted,marginBottom:16}}>
+                  {res.instances_before}→{res.instances_after} instances · {res.latency_ms?.toFixed(1)}ms · <span style={{color:t.blue}}>{res.policy_type}</span>
+                </div>
+                {res.q_values&&(
+                  <div style={{marginBottom:16}}>
+                    <div style={{fontSize:9,color:t.textDim,marginBottom:8,letterSpacing:'0.12em'}}>Q-VALUE DISTRIBUTION</div>
+                    {Object.entries(res.q_values).sort(([,a],[,b])=>b-a).map(([a,q])=>(
+                      <Signal key={a} label={a} value={Math.max(0,q+10)} max={20} color={AC[a]||t.blue} t={t}/>
+                    ))}
+                  </div>
+                )}
+                {res.fallback_used&&<Badge label="FALLBACK USED" color={t.red}/>}
+              </>
+            }
+          </div>
+        )}
+
+        {tab==='explain'&&(!explain?
+          <div style={{color:t.textDim,fontSize:11,fontFamily:'Space Mono,monospace',paddingTop:20}}>Make a decision to see explainability analysis.</div>:
+          <div style={{animation:'xfade 0.3s ease',fontFamily:'Space Mono,monospace',fontSize:11}}>
+            {/* Why chosen */}
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:9,color:t.textDim,letterSpacing:'0.12em',marginBottom:6}}>WHY THIS ACTION</div>
+              <div style={{color:t.textMuted,lineHeight:1.7,background:t.bg3,padding:12}}>{explain.why_chosen}</div>
+            </div>
+            {/* Guard */}
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:9,color:t.textDim,letterSpacing:'0.12em',marginBottom:6}}>EXPLORATION GUARD</div>
+              <div style={{color:t.textMuted,lineHeight:1.7,background:t.bg3,padding:12}}>{explain.guard_explanation}</div>
+            </div>
+            {/* Confidence */}
+            {explain.confidence_analysis&&(
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:9,color:t.textDim,letterSpacing:'0.12em',marginBottom:6}}>CONFIDENCE ANALYSIS</div>
+                <div style={{background:t.bg3,padding:12}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                    <Badge label={explain.confidence_analysis.confidence_level} color={ConfLevel[explain.confidence_analysis.confidence_level]||t.blue}/>
+                    <span style={{color:t.textMuted}}>spread: {explain.confidence_analysis.spread}</span>
+                  </div>
+                  <div style={{color:t.textMuted,lineHeight:1.6}}>{explain.confidence_analysis.interpretation}</div>
+                </div>
+              </div>
+            )}
+            {/* Risk */}
+            {explain.risk_assessment&&explain.risk_assessment.risk_factors.length>0&&(
+              <div>
+                <div style={{fontSize:9,color:t.textDim,letterSpacing:'0.12em',marginBottom:6}}>RISK FACTORS</div>
+                <div style={{background:t.bg3,padding:12}}>
+                  <Badge label={explain.risk_assessment.risk_level} color={explain.risk_assessment.risk_level==='LOW'?t.green:explain.risk_assessment.risk_level==='HIGH'?t.red:t.amber}/>
+                  {explain.risk_assessment.risk_factors.map((r,i)=>(
+                    <div key={i} style={{color:t.textMuted,marginTop:6,lineHeight:1.5}}>{r}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab==='alternatives'&&(!explain?
+          <div style={{color:t.textDim,fontSize:11,fontFamily:'Space Mono,monospace',paddingTop:20}}>Make a decision to see alternative analysis.</div>:
+          <div style={{animation:'xfade 0.3s ease',fontFamily:'Space Mono,monospace',fontSize:11}}>
+            <div style={{fontSize:9,color:t.textDim,letterSpacing:'0.12em',marginBottom:12}}>ALL 5 POSSIBLE ACTIONS — ranked by estimated reward</div>
+            {(explain.alternatives||[]).map((alt,i)=>(
+              <div key={i} style={{display:'grid',gridTemplateColumns:'1fr auto auto auto',gap:8,alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${t.border}22`}}>
+                <div>
+                  <span style={{color:AC[alt.action]||t.textMuted,fontWeight:700}}>{alt.action}</span>
+                  {alt.is_chosen&&<span style={{marginLeft:8,fontSize:9,color:t.blue}}> ← CHOSEN</span>}
+                </div>
+                <span style={{color:t.textMuted,fontSize:10}}>{alt.resulting_instances} inst</span>
+                <span style={{color:alt.estimated_reward>-3?t.green:t.red}}>{alt.estimated_reward?.toFixed(3)}</span>
+                {alt.sla_would_be_violated&&<Badge label="SLA BREACH" color={t.red}/>}
+                {!alt.sla_would_be_violated&&<span style={{fontSize:9,color:t.textDim}}>ok</span>}
+              </div>
+            ))}
+            {explain.baseline_comparison&&(
+              <div style={{marginTop:16,background:t.bg3,padding:12}}>
+                <div style={{fontSize:9,color:t.textDim,letterSpacing:'0.12em',marginBottom:6}}>BASELINE COMPARISON</div>
+                <div style={{color:t.textMuted,lineHeight:1.6}}>{explain.baseline_comparison.interpretation}</div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Operator Controls (with confirmation gate) ───────────── */
+function PanelOperator({t,api}){
+  const{role,user_id}=useContext(AuthCtx)||{role:'viewer'};
+  const[status,setStatus]=useState(null);
+  const[reason,setReason]=useState('');
+  const[confirm,setConfirm]=useState(null);
+  const[loading,setLoading]=useState(false);
+  const[msg,setMsg]=useState('');
+
+  const refresh=useCallback(async()=>{const s=await api.get('/api/v1/operator/status');if(!s.error)setStatus(s);},[]);
+  useEffect(()=>{refresh();const iv=setInterval(refresh,5000);return()=>clearInterval(iv);},[refresh]);
+
+  const requestConfirm=async(action)=>{
+    if(!reason.trim()){setMsg('⚠ Reason required');return;}
+    if(role==='viewer'){setMsg('⚠ Viewer role cannot execute operator actions');return;}
+    setLoading(true);setMsg('');
+    const r=await api.post('/api/v1/approvals/confirm/challenge',{action,reason});
+    setLoading(false);
+    if(r.error){setMsg(`Error: ${r.error}`);return;}
+    setConfirm({action,challenge:r.challenge_string,token:r.confirmation_token,blastRadius:r.blast_radius,riskLevel:r.risk_level});
+  };
+
+  const executeAction=async(actionPath,body={})=>{
+    setLoading(true);setMsg('');
+    const r=await api.post(actionPath,{...body,reason});
+    setMsg(r.error?`Error: ${r.error}`:`✓ ${r.status||r.effect||'Done'}`);
+    setLoading(false);setConfirm(null);setTimeout(refresh,600);
+  };
+
+  const onConfirmed=async(validationResult)=>{
+    const action=confirm?.action;
+    const paths={
+      KILL_SWITCH_GLOBAL:'/api/v1/operator/kill-switch/activate',
+      KILL_SWITCH_RESTORE:'/api/v1/operator/kill-switch/deactivate',
+      MAINTENANCE_ENTER:'/api/v1/operator/maintenance/enter',
+      MAINTENANCE_EXIT:'/api/v1/operator/maintenance/exit',
+      FORCE_BASELINE:'/api/v1/operator/override/force-baseline',
+      RELEASE_BASELINE:'/api/v1/operator/override/release-baseline',
+      FREEZE_EXPLORATION:'/api/v1/operator/exploration/freeze',
+      UNFREEZE_EXPLORATION:'/api/v1/operator/exploration/unfreeze',
+    };
+    if(paths[action]) await executeAction(paths[action]);
+  };
+
+  const ks=status?.kill_switch||{};
+  const maintenance=status?.maintenance_mode;
+  const baseline=status?.baseline_override;
+  const canOperate=role!=='viewer';
+
+  const CtrlCard=({label,active,activeColor,desc,confirmAction,restoreAction,restoreLabel='RESTORE'})=>(
+    <div style={{background:t.bg2,border:`1px solid ${active?activeColor:t.border}`,padding:20,transition:'border-color 0.3s'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+        <SectionHead label={label} t={t} color={active?activeColor:t.blue}/>
+        {active&&<PulseDot color={activeColor} size={7}/>}
+      </div>
+      <div style={{fontSize:11,color:active?activeColor:t.textMuted,marginBottom:16,fontFamily:'Space Mono,monospace',minHeight:36,lineHeight:1.5}}>{desc}</div>
+      {canOperate?(
+        <div style={{display:'flex',gap:8}}>
+          <XBtn onClick={()=>requestConfirm(confirmAction)} t={t} color={active?t.textMuted:activeColor} disabled={loading}>{active?'ALREADY ACTIVE':'ACTIVATE'}</XBtn>
+          {restoreAction&&<XBtn onClick={()=>requestConfirm(restoreAction)} t={t} disabled={loading}>{restoreLabel}</XBtn>}
+        </div>
+      ):(
+        <div style={{fontSize:10,color:t.textDim,fontFamily:'Space Mono,monospace'}}>Operator role required</div>
+      )}
+    </div>
+  );
+
+  return(
+    <div>
+      {confirm&&(
+        <ConfirmModal action={confirm.action} challenge={confirm.challenge} onConfirm={onConfirmed} onCancel={()=>setConfirm(null)} t={t} api={api}/>
+      )}
+
+      {/* Role indicator */}
+      <div style={{marginBottom:20,padding:'10px 16px',background:t.bg2,border:`1px solid ${t.border}`,display:'flex',alignItems:'center',gap:12}}>
+        <Badge label={`ROLE: ${role.toUpperCase()}`} color={role==='admin'?t.green:role==='operator'?t.blue:t.textMuted}/>
+        <span style={{fontSize:10,color:t.textMuted,fontFamily:'Space Mono,monospace'}}>{user_id}</span>
+        {!canOperate&&<span style={{fontSize:10,color:t.red,fontFamily:'Space Mono,monospace'}}>Read-only — operator or admin role required for control actions</span>}
+      </div>
+
+      <div style={{marginBottom:20}}>
+        <SectionHead label="Action Reason (required for all operations)" t={t}/>
+        <XInput value={reason} onChange={setReason} placeholder="Describe why you are taking this action..." t={t}/>
+        <Msg msg={msg} t={t}/>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+        <CtrlCard label="Global Kill Switch" active={ks.global_killed} activeColor={t.red}
+          desc={ks.global_killed?'ALL ML POLICIES DISABLED — Baseline serves all traffic':'Activate to emergency-fallback all traffic to baseline.'}
+          confirmAction="KILL_SWITCH_GLOBAL" restoreAction="KILL_SWITCH_RESTORE" restoreLabel="RESTORE"/>
+        <CtrlCard label="Maintenance Mode" active={maintenance} activeColor={t.amber}
+          desc={maintenance?'ACTIVE: Baseline forced + exploration & promotion frozen':'Baseline forced + exploration frozen + promotion frozen.'}
+          confirmAction="MAINTENANCE_ENTER" restoreAction="MAINTENANCE_EXIT" restoreLabel="EXIT"/>
+        <CtrlCard label="Force Baseline Override" active={baseline} activeColor={t.purple}
+          desc={baseline?'BASELINE FORCED — ML training continues in background':'Route traffic to baseline without stopping ML training.'}
+          confirmAction="FORCE_BASELINE" restoreAction="RELEASE_BASELINE" restoreLabel="RELEASE"/>
+        <CtrlCard label="Exploration Freeze" active={ks.exploration_frozen} activeColor={t.amber}
+          desc={ks.exploration_frozen?'FROZEN — All policies exploit only, no exploration':'Freeze to stop exploration during high-risk periods.'}
+          confirmAction="FREEZE_EXPLORATION" restoreAction="UNFREEZE_EXPLORATION" restoreLabel="UNFREEZE"/>
+      </div>
+    </div>
+  );
+}
+
+/* ── Approval Queue Panel ──────────────────────────────────── */
+function PanelApprovals({t,api}){
+  const{role,user_id}=useContext(AuthCtx)||{role:'viewer'};
+  const[pending,setPending]=useState([]);
+  const[comment,setComment]=useState('');
+  const[msg,setMsg]=useState('');
+  const[loading,setLoading]=useState(false);
+
+  const load=useCallback(async()=>{
+    const r=await api.get('/api/v1/approvals/pending');
+    if(!r.error) setPending(r.requests||[]);
+  },[]);
+  useEffect(()=>{load();const iv=setInterval(load,5000);return()=>clearInterval(iv);},[load]);
+
+  const review=async(id,approve)=>{
+    if(!comment.trim()&&!approve){setMsg('⚠ Comment required for rejection');return;}
+    setLoading(true);setMsg('');
+    const path=`/api/v1/approvals/${id}/${approve?'approve':'reject'}`;
+    const r=await api.post(path,{comment:comment||'Approved'});
+    setMsg(r.error?`Error: ${r.error}`:`✓ Request ${approve?'approved':'rejected'}`);
+    setLoading(false);setTimeout(load,500);
+  };
+
+  const SC={PENDING:t.amber,APPROVED:t.green,REJECTED:t.red,EXECUTED:t.blue,EXPIRED:t.textMuted,CANCELLED:t.textMuted};
+  const isAdmin=role==='admin';
+
+  return(
+    <div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:12,alignItems:'end',marginBottom:20}}>
+        <div>
+          <SectionHead label={`Pending Approvals (${pending.length})`} t={t}/>
+          <div style={{fontSize:11,color:t.textMuted,fontFamily:'Space Mono,monospace',lineHeight:1.6}}>
+            High-risk actions require second-person authorization. {isAdmin?'You can approve requests here.':'Admin role required to approve requests.'}
+          </div>
+        </div>
+        <Badge label={`ROLE: ${role.toUpperCase()}`} color={isAdmin?t.green:t.textMuted}/>
+      </div>
+
+      {pending.length===0&&(
+        <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:40,textAlign:'center',color:t.textDim,fontFamily:'Space Mono,monospace',fontSize:11}}>
+          No pending approval requests.<br/>High-risk actions appear here when requested.
+        </div>
+      )}
+
+      {pending.map(req=>(
+        <div key={req.id} style={{background:t.bg2,border:`1px solid ${t.amber}44`,padding:20,marginBottom:12,animation:'xfade 0.3s ease'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14}}>
+            <div>
+              <div style={{fontFamily:'Space Mono,monospace',fontWeight:700,color:t.text,marginBottom:4}}>{req.action}</div>
+              <div style={{fontSize:11,color:t.textMuted,fontFamily:'Space Mono,monospace'}}>Requested by: {req.requester} ({req.requester_role})</div>
+            </div>
+            <PulseDot color={t.amber}/>
+          </div>
+
+          <div style={{background:`${t.red}12`,border:`1px solid ${t.red}33`,padding:12,marginBottom:12,fontSize:11,color:t.red,fontFamily:'Space Mono,monospace',lineHeight:1.6}}>
+            <strong>Blast Radius:</strong> {req.blast_radius}
+          </div>
+
+          <div style={{fontSize:11,color:t.textMuted,marginBottom:14,fontFamily:'Space Mono,monospace'}}>
+            Reason: {req.reason}
+          </div>
+
+          {req.can_review&&isAdmin?(
+            <div>
+              <XInput value={comment} onChange={setComment} placeholder="Reviewer comment (required for rejection)..." t={t}/>
+              <Msg msg={msg} t={t}/>
+              <div style={{display:'flex',gap:8,marginTop:10}}>
+                <XBtn onClick={()=>review(req.id,true)} t={t} color={t.green} disabled={loading}>✓ APPROVE</XBtn>
+                <XBtn onClick={()=>review(req.id,false)} t={t} danger disabled={loading||!comment.trim()}>✗ REJECT</XBtn>
+              </div>
+            </div>
+          ):(
+            <div style={{fontSize:10,color:t.textDim,fontFamily:'Space Mono,monospace'}}>
+              {!isAdmin?'Admin role required to review':`You submitted this request — another admin must review it`}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── Incident Workflow Panel ───────────────────────────────── */
+function PanelIncidents({t,api}){
+  const{role,user_id}=useContext(AuthCtx)||{role:'viewer'};
+  const[incidents,setIncidents]=useState([]);
+  const[selected,setSelected]=useState(null);
+  const[note,setNote]=useState('');
+  const[mitigationAction,setMitigation]=useState('');
+  const[msg,setMsg]=useState('');
+  const[loading,setLoading]=useState(false);
+  const[showOpen,setShowOpen]=useState(false);
+  const[newTitle,setNewTitle]=useState('');
+  const[newSeverity,setNewSeverity]=useState('P2');
+
+  const load=useCallback(async()=>{
+    const r=await api.get('/api/v1/incidents/');
+    if(!r.error) setIncidents(r.incidents||[]);
+  },[]);
+  useEffect(()=>{load();const iv=setInterval(load,6000);return()=>clearInterval(iv);},[load]);
+
+  const act=async(id,action,body={})=>{
+    setLoading(true);setMsg('');
+    const r=await api.post(`/api/v1/incidents/${id}/${action}`,body);
+    setMsg(r.error?`Error: ${r.error}`:`✓ Incident ${action}`);
+    setLoading(false);
+    setTimeout(async()=>{load();if(selected?.id===id){const updated=await api.get(`/api/v1/incidents/${id}`);if(!updated.error)setSelected(updated);}},500);
+  };
+
+  const openIncident=async()=>{
+    if(!newTitle.trim()){setMsg('Title required');return;}
+    const r=await api.post('/api/v1/incidents/open',{title:newTitle,severity:newSeverity,trigger_type:'MANUAL'});
+    setMsg(r.error?`Error: ${r.error}`:`✓ Incident opened: ${r.id}`);
+    setShowOpen(false);setNewTitle('');setTimeout(load,300);
+  };
+
+  const SC={OPEN:t.red,ACKNOWLEDGED:t.amber,MITIGATING:t.blue,RESOLVED:t.green,POST_MORTEM_COMPLETE:t.textMuted};
+  const sevC={P0:t.red,P1:t.red,P2:t.amber,P3:t.textMuted};
+  const canOperate=role!=='viewer';
+
+  const IncidentRow=({inc})=>(
+    <div onClick={()=>setSelected(inc)} style={{padding:'12px 16px',borderBottom:`1px solid ${t.border}22`,cursor:'pointer',background:selected?.id===inc.id?`${t.blue}10`:'transparent',display:'grid',gridTemplateColumns:'auto 1fr auto auto',gap:12,alignItems:'center',transition:'background 0.15s'}}>
+      <Badge label={inc.severity} color={sevC[inc.severity]||t.textMuted}/>
+      <div>
+        <div style={{fontSize:12,color:t.text,fontFamily:'Space Mono,monospace'}}>{inc.title}</div>
+        <div style={{fontSize:10,color:t.textMuted,marginTop:2}}>
+          {inc.trigger_type} · {new Date(inc.created_at).toLocaleString()}
+        </div>
+      </div>
+      <Badge label={inc.status} color={SC[inc.status]||t.textMuted}/>
+      {inc.acknowledged_by&&<span style={{fontSize:10,color:t.textDim,fontFamily:'Space Mono,monospace'}}>{inc.acknowledged_by}</span>}
+    </div>
+  );
+
+  return(
+    <div style={{display:'grid',gridTemplateColumns:'1fr 360px',gap:16}}>
+      {/* List */}
+      <div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <SectionHead label={`Incidents (${incidents.length})`} t={t}/>
+          {canOperate&&<XBtn onClick={()=>setShowOpen(true)} t={t} color={t.red} small>+ OPEN INCIDENT</XBtn>}
+        </div>
+
+        {showOpen&&(
+          <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:16,marginBottom:12,animation:'xfade 0.2s ease'}}>
+            <div style={{marginBottom:10}}>
+              <XInput value={newTitle} onChange={setNewTitle} placeholder="Incident title..." t={t}/>
+            </div>
+            <div style={{display:'flex',gap:8,marginBottom:10}}>
+              {['P0','P1','P2','P3'].map(s=>(
+                <button key={s} onClick={()=>setNewSeverity(s)} style={{flex:1,padding:'6px 0',background:newSeverity===s?`${sevC[s]||t.textMuted}22`:'transparent',border:`1px solid ${newSeverity===s?sevC[s]||t.textMuted:t.border}`,color:newSeverity===s?sevC[s]||t.text:t.textMuted,fontSize:10,fontFamily:'Space Mono,monospace',cursor:'pointer'}}>{s}</button>
+              ))}
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <XBtn onClick={openIncident} t={t} color={t.red} small>OPEN</XBtn>
+              <XBtn onClick={()=>setShowOpen(false)} t={t} small>CANCEL</XBtn>
+            </div>
+            <Msg msg={msg} t={t}/>
+          </div>
+        )}
+
+        <div style={{background:t.bg2,border:`1px solid ${t.border}`,overflow:'hidden'}}>
+          {incidents.length===0&&<div style={{padding:40,textAlign:'center',color:t.textDim,fontSize:11,fontFamily:'Space Mono,monospace'}}>No incidents. System nominal.</div>}
+          {incidents.map(inc=><IncidentRow key={inc.id} inc={inc}/>)}
+        </div>
+      </div>
+
+      {/* Detail */}
+      <div>
+        {!selected?(
+          <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:40,textAlign:'center',color:t.textDim,fontSize:11,fontFamily:'Space Mono,monospace'}}>
+            Select an incident to manage its lifecycle.
+          </div>
+        ):(
+          <div style={{background:t.bg2,border:`1px solid ${SC[selected.status]||t.border}`,padding:20,animation:'xfade 0.3s ease'}}>
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:13,fontWeight:700,color:t.text,marginBottom:4,fontFamily:'Space Mono,monospace'}}>{selected.title}</div>
+              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                <Badge label={selected.severity} color={sevC[selected.severity]||t.textMuted}/>
+                <Badge label={selected.status} color={SC[selected.status]||t.textMuted}/>
+              </div>
+            </div>
+
+            {/* Workflow buttons */}
+            {canOperate&&(
+              <div style={{marginBottom:16}}>
+                <XInput value={note} onChange={setNote} placeholder="Action note..." t={t}/>
+                <div style={{display:'flex',gap:6,marginTop:8,flexWrap:'wrap'}}>
+                  {selected.status==='OPEN'&&<XBtn onClick={()=>act(selected.id,'acknowledge',{note})} t={t} color={t.amber} small disabled={loading}>ACKNOWLEDGE</XBtn>}
+                  {['OPEN','ACKNOWLEDGED'].includes(selected.status)&&(
+                    <>
+                      <XInput value={mitigationAction} onChange={setMitigation} placeholder="Mitigation action..." t={t}/>
+                      <XBtn onClick={()=>act(selected.id,'mitigate',{mitigation_action:mitigationAction||note,mitigation_detail:note})} t={t} color={t.blue} small disabled={loading||!mitigationAction}>MITIGATE</XBtn>
+                    </>
+                  )}
+                  {['ACKNOWLEDGED','MITIGATING'].includes(selected.status)&&(
+                    <XBtn onClick={()=>act(selected.id,'resolve',{resolution_note:note||'Resolved'})} t={t} color={t.green} small disabled={loading||!note}>RESOLVE</XBtn>
+                  )}
+                </div>
+                <Msg msg={msg} t={t}/>
+              </div>
+            )}
+
+            {/* Timeline */}
+            <SectionHead label="Timeline" t={t} color={t.cyan}/>
+            <div style={{maxHeight:300,overflowY:'auto'}}>
+              {(selected.timeline||[]).slice().reverse().map((ev,i)=>(
+                <div key={i} style={{padding:'6px 0',borderBottom:`1px solid ${t.border}1A`,fontFamily:'Space Mono,monospace',fontSize:10}}>
+                  <div style={{color:t.textDim}}>{new Date(ev.ts).toLocaleString()}</div>
+                  <div style={{color:t.blue,marginTop:2}}>{ev.action} — {ev.actor}</div>
+                  <div style={{color:t.textMuted,marginTop:1}}>{ev.note}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Policies Panel ────────────────────────────────────────── */
+function PanelPolicy({t,api}){
+  const[versions,setVersions]=useState([]);
+  const[trust,setTrust]=useState({});
+
+  useEffect(()=>{
+    const load=async()=>{
+      const v=await api.get('/api/v1/policies/versions');if(!v.error)setVersions(v.versions||[]);
+      for(const pt of['RL','BANDIT']){const tr=await api.get(`/api/v1/trust/${pt}`);if(!tr.error&&!tr.status)setTrust(p=>({...p,[pt]:tr}));}
+    };
+    load();const iv=setInterval(load,10000);return()=>clearInterval(iv);
+  },[]);
+
+  const SC={ACTIVE:t.green,SHADOW:t.blue,RETIRED:t.textMuted,TRAINING:t.amber};
+  const RC={PROMOTE:t.green,MONITOR:t.blue,WARN:t.amber,ROLLBACK:t.red};
+
+  const TrustGauge=({pt})=>{
+    const tr=trust[pt];if(!tr)return(
+      <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:20}}>
+        <SectionHead label={`${pt} Trust`} t={t}/>
+        <div style={{color:t.textDim,fontSize:11,fontFamily:'Space Mono,monospace'}}>Not computed yet — make decisions to generate trust data.</div>
+      </div>
+    );
+    const color=RC[tr.recommendation]||t.textMuted;
+    return(
+      <div style={{background:t.bg2,border:`1px solid ${color}44`,padding:20}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+          <SectionHead label={`${pt} Trust Score`} t={t} color={color}/>
+          <Badge label={tr.recommendation} color={color}/>
+        </div>
+        <div style={{fontSize:38,fontFamily:'Space Mono,monospace',color,fontWeight:700,marginBottom:12}}>
+          {(tr.composite_score*100).toFixed(1)}<span style={{fontSize:16}}>%</span>
+        </div>
+        {tr.components&&(<>
+          <Signal label="Reward trend (30%)" value={tr.components.reward_trend*100||0} color={t.blue} t={t}/>
+          <Signal label="SLA compliance (20%)" value={tr.components.sla*100||0} color={t.green} t={t}/>
+          <Signal label="Drift signal (25%)" value={tr.components.drift*100||0} color={t.amber} t={t}/>
+          <Signal label="Confidence (15%)" value={tr.components.confidence*100||0} color={t.purple} t={t}/>
+          <Signal label="Data recency (5%)" value={tr.components.data_recency*100||0} color={t.textMuted} t={t}/>
+        </>)}
+        <div style={{fontSize:10,color:t.textDim,marginTop:8,fontFamily:'Space Mono,monospace'}}>{tr.n_decisions} decisions · {tr.window_hours}h · {new Date(tr.computed_at).toLocaleTimeString()}</div>
+      </div>
+    );
+  };
+
+  return(
+    <div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:24}}>
+        <TrustGauge pt="RL"/><TrustGauge pt="BANDIT"/>
+      </div>
+      <SectionHead label="Policy Registry" t={t}/>
+      <div style={{border:`1px solid ${t.border}`,overflow:'hidden'}}>
+        <table style={{width:'100%',borderCollapse:'collapse',fontFamily:'Space Mono,monospace',fontSize:11}}>
+          <thead>
+            <tr style={{background:t.bg3}}>
+              {['Type','Version','Algorithm','Status','Reward μ','Seeds','Created'].map(h=>(
+                <th key={h} style={{padding:'10px 14px',textAlign:'left',color:t.textMuted,fontWeight:400,fontSize:10,letterSpacing:'0.1em',borderBottom:`1px solid ${t.border}`}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {versions.length===0&&<tr><td colSpan={7} style={{padding:24,color:t.textDim,textAlign:'center'}}>No policy versions registered. Make decisions to generate policy data.</td></tr>}
+            {versions.map((v,i)=>(
+              <tr key={i} style={{borderBottom:`1px solid ${t.border}22`,background:i%2===0?'transparent':`${t.bg3}44`}}>
+                <td style={{padding:'9px 14px',color:t.blue}}>{v.policy_type}</td>
+                <td style={{padding:'9px 14px'}}>v{v.version}</td>
+                <td style={{padding:'9px 14px',color:t.textMuted}}>{v.algorithm}</td>
+                <td style={{padding:'9px 14px'}}><Badge label={v.status} color={SC[v.status]||t.textMuted}/></td>
+                <td style={{padding:'9px 14px'}}>{v.eval_reward_mean?.toFixed(4)??'—'}</td>
+                <td style={{padding:'9px 14px'}}>{v.eval_seeds??'—'}</td>
+                <td style={{padding:'9px 14px',color:t.textMuted}}>{new Date(v.created_at).toLocaleDateString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ── Canary Panel ─────────────────────────────────────────── */
+function PanelCanary({t,api}){
+  const{role}=useContext(AuthCtx)||{role:'viewer'};
+  const[pt,setPt]=useState('RL');
+  const[metrics,setMetrics]=useState(null);
+  const[vid,setVid]=useState('');
+  const[msg,setMsg]=useState('');
+  const canOperate=role!=='viewer';
+
+  const refresh=useCallback(async()=>{const m=await api.get(`/api/v1/canary/${pt}/status`);if(!m.error)setMetrics(m);},[pt]);
+  useEffect(()=>{setMetrics(null);refresh();const iv=setInterval(refresh,4000);return()=>clearInterval(iv);},[refresh]);
+
+  const act=async(path,body={})=>{const r=await api.post(path,body);setMsg(r.error?`Error: ${r.error}`:`✓ Done`);setTimeout(refresh,500);};
+
+  const cfg=metrics?.config||{};
+  const SC={INACTIVE:t.textMuted,ABORTED:t.red,FULL:t.green};
+  const sc=SC[cfg.stage]||t.blue;
+  const slaRate=(metrics?.sla_violation_rate||0)*100;
+
+  return(
+    <div>
+      <div style={{display:'flex',gap:8,marginBottom:20}}>
+        {['RL','BANDIT'].map(p=><XBtn key={p} onClick={()=>setPt(p)} t={t} color={pt===p?t.blue:undefined}>{p}</XBtn>)}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
+        <div style={{background:t.bg2,border:`1px solid ${cfg.stage==='ABORTED'?t.red:sc+'44'}`,padding:20}}>
+          <SectionHead label="Traffic Split" t={t} color={sc}/>
+          <div style={{fontSize:52,fontFamily:'Space Mono,monospace',color:sc,fontWeight:700,marginBottom:4}}>{cfg.traffic_pct||0}<span style={{fontSize:24}}>%</span></div>
+          <div style={{fontSize:11,color:t.textMuted,marginBottom:12}}>of traffic to {pt}</div>
+          <Badge label={cfg.stage||'INACTIVE'} color={sc}/>
+          {cfg.abort_reason&&<div style={{fontSize:10,color:t.red,marginTop:8,fontFamily:'Space Mono,monospace'}}>Abort reason: {cfg.abort_reason}</div>}
+        </div>
+
+        <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:20}}>
+          <SectionHead label="Auto-Abort Thresholds" t={t}/>
+          <Signal label="SLA violation rate" value={slaRate} color={slaRate>5?t.red:t.green} t={t}/>
+          <Signal label="Fallback rate" value={(metrics?.fallback_rate||0)*100} max={10} color={(metrics?.fallback_rate||0)*100>2?t.red:t.amber} t={t}/>
+          {slaRate>5&&<div style={{marginTop:10,padding:'6px 10px',background:`${t.red}15`,border:`1px solid ${t.red}44`,fontSize:10,color:t.red,fontFamily:'Space Mono,monospace'}}>⚠ SLA rate {slaRate.toFixed(1)}% exceeds 5% auto-abort threshold</div>}
+          <div style={{marginTop:10,fontSize:10,color:t.textDim,fontFamily:'Space Mono,monospace'}}>{metrics?.canary_decisions||0} decisions · {metrics?.sla_violations||0} SLA violations</div>
+        </div>
+      </div>
+
+      {canOperate&&(
+        <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:20}}>
+          <SectionHead label="Canary Controls" t={t}/>
+          <div style={{marginBottom:12}}>
+            <label style={{fontSize:10,color:t.textMuted,fontFamily:'Space Mono,monospace',display:'block',marginBottom:5}}>VERSION ID (for start)</label>
+            <XInput value={vid} onChange={setVid} placeholder="Policy version UUID" t={t}/>
+          </div>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            <XBtn onClick={()=>act(`/api/v1/canary/${pt}/start`,{version_id:vid,initial_pct:10,reason:'Manual canary start'})} t={t} color={t.green}>START 10%</XBtn>
+            <XBtn onClick={()=>act(`/api/v1/canary/${pt}/advance`,{reason:'Manual advance'})} t={t} color={t.blue}>ADVANCE →</XBtn>
+            <XBtn onClick={()=>act(`/api/v1/canary/${pt}/abort`,{reason:'Manual abort'})} t={t} danger>ABORT</XBtn>
+          </div>
+          <Msg msg={msg} t={t}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Cost & Infrastructure Panel ──────────────────────────── */
+function PanelCostInfra({t,api}){
+  const[cost,setCost]=useState(null);const[cb,setCb]=useState(null);const[slo,setSlo]=useState(null);
+  useEffect(()=>{
+    const load=async()=>{
+      const c=await api.get('/api/v1/cost/report');if(!c.error)setCost(c);
+      const s=await api.get('/api/v1/infra/circuit-breakers');if(!s.error)setCb(s);
+      const sl=await api.get('/api/v1/monitoring/health/slo');if(!sl.error)setSlo(sl);
+    };
+    load();const iv=setInterval(load,6000);return()=>clearInterval(iv);
+  },[]);
+  const CBS={CLOSED:t.green,OPEN:t.red,HALF_OPEN:t.amber};
+  return(
+    <div>
+      {cost&&(
+        <div style={{marginBottom:24}}>
+          <SectionHead label="Hourly Cost Tracking" t={t} color={t.amber}/>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:14}}>
+            <MetricCard label="Total Cost" value={`$${(cost.total_cost_usd||0).toFixed(4)}`} accent={t.amber} t={t}/>
+            <MetricCard label="Decisions" value={cost.decisions||0} accent={t.blue} t={t}/>
+            <MetricCard label="Per Decision" value={`$${(cost.avg_cost_per_decision_usd||0).toFixed(6)}`} accent={t.textMuted} t={t}/>
+            <MetricCard label="Budget Used" value={`${(cost.budget_utilization_pct||0).toFixed(1)}%`} accent={cost.budget_utilization_pct>80?t.red:t.green} t={t} sub={`of $${cost.hourly_budget_usd}`}/>
+          </div>
+          <div style={{height:8,background:t.bg3,overflow:'hidden'}}>
+            <div style={{height:'100%',width:`${Math.min(100,cost.budget_utilization_pct||0)}%`,background:cost.budget_utilization_pct>80?t.red:t.green,transition:'width 0.6s ease'}}/>
+          </div>
+        </div>
+      )}
+      {cb&&(
+        <div style={{marginBottom:24}}>
+          <SectionHead label="Circuit Breakers" t={t}/>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+            {Object.entries(cb.circuit_breakers||{}).map(([name,s])=>(
+              <div key={name} style={{background:t.bg2,border:`1px solid ${CBS[s.state]||t.border}44`,padding:16}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                  <span style={{fontSize:10,textTransform:'uppercase',letterSpacing:'0.1em',color:t.textMuted,fontFamily:'Space Mono,monospace'}}>{name}</span>
+                  <PulseDot color={CBS[s.state]||t.textMuted} size={6}/>
+                </div>
+                <div style={{fontSize:18,fontFamily:'Space Mono,monospace',color:CBS[s.state]||t.text,marginBottom:5,fontWeight:700}}>{s.state}</div>
+                <Signal label="Failures" value={s.failure_count} max={s.failure_threshold} color={s.failure_count>0?t.red:t.green} t={t}/>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {slo&&(
+        <div>
+          <SectionHead label="SLO Health" t={t} color={slo.overall_passing?t.green:t.red}/>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            {Object.entries(slo).filter(([k])=>typeof slo[k]==='object'&&slo[k]?.passing!=null).map(([key,val])=>(
+              <div key={key} style={{background:t.bg2,border:`1px solid ${val.passing?t.green:t.red}44`,padding:16}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                  <span style={{fontSize:10,color:t.textMuted,fontFamily:'Space Mono,monospace',letterSpacing:'0.1em'}}>{key.replace(/_/g,' ').toUpperCase()}</span>
+                  <Badge label={val.passing?'PASS':'FAIL'} color={val.passing?t.green:t.red}/>
+                </div>
+                <div style={{fontSize:11,color:t.textMuted,fontFamily:'Space Mono,monospace'}}>{val.target}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Audit Panel ──────────────────────────────────────────── */
+function PanelAudit({t,api}){
+  const[decId,setDecId]=useState('');const[replay,setReplay]=useState(null);
+  const[timeline,setTimeline]=useState(null);const[hours,setHours]=useState(2);const[msg,setMsg]=useState('');
+  const doReplay=async()=>{if(!decId.trim()){setMsg('Enter a decision ID');return;}const r=await api.get(`/api/v1/audit/decisions/${decId}/replay`);if(r.error)setMsg(`Error: ${r.error}`);else{setReplay(r);setMsg('');}};
+  const loadTl=async()=>{const r=await api.get(`/api/v1/audit/incidents/timeline?window_hours=${hours}`);if(!r.error)setTimeline(r);};
+  const SEV={INFO:t.textMuted,WARNING:t.amber,CRITICAL:t.red};
+  return(
+    <div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+        <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:20}}>
+          <SectionHead label="Decision Time-Travel Replay" t={t}/>
+          <div style={{fontSize:11,color:t.textMuted,marginBottom:14,fontFamily:'Space Mono,monospace',lineHeight:1.6}}>Full reconstruction: state, policy, Q-values, guard decision, reward outcome, drift context, operator events.</div>
+          <div style={{marginBottom:10}}><XInput value={decId} onChange={setDecId} placeholder="Decision log UUID" t={t}/></div>
+          <XBtn onClick={doReplay} t={t} color={t.blue} full>REPLAY DECISION</XBtn>
+          <Msg msg={msg} t={t}/>
+          {replay&&(
+            <div style={{marginTop:16,animation:'xfade 0.3s ease',fontFamily:'Space Mono,monospace',fontSize:11}}>
+              <div style={{fontSize:10,color:t.green,marginBottom:10}}>Replayed in {replay.replay_latency_ms}ms</div>
+              <div style={{background:t.bg3,padding:12,marginBottom:10}}>
+                <div style={{color:t.blue,fontSize:13,fontWeight:700,marginBottom:4}}>{replay.decision?.action}</div>
+                <div style={{fontSize:11,color:t.textMuted}}>{replay.decision?.policy_type} · {replay.decision?.latency_ms?.toFixed(0)}ms</div>
+                {replay.decision?.fallback_flag&&<Badge label="FALLBACK" color={t.red}/>}
+              </div>
+              {replay.reward_outcome&&<div style={{fontSize:11,color:t.textMuted,marginBottom:8}}>Reward: <span style={{color:t.blue}}>{replay.reward_outcome.reward?.toFixed(4)}</span></div>}
+              <div style={{fontSize:10,color:t.textDim,lineHeight:1.8}}>{replay.summary}</div>
+            </div>
+          )}
+        </div>
+        <div style={{background:t.bg2,border:`1px solid ${t.border}`,padding:20}}>
+          <SectionHead label="Incident Timeline" t={t} color={t.amber}/>
+          <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:12}}>
+            <span style={{fontSize:10,color:t.textMuted,fontFamily:'Space Mono,monospace',minWidth:60}}>Window: {hours}h</span>
+            <input type="range" min={1} max={48} value={hours} onChange={e=>setHours(+e.target.value)} style={{flex:1,accentColor:t.amber}}/>
+            <XBtn onClick={loadTl} t={t} small>LOAD</XBtn>
+          </div>
+          {timeline?(
+            <div style={{maxHeight:320,overflowY:'auto'}}>
+              <div style={{fontSize:10,color:t.textMuted,fontFamily:'Space Mono,monospace',marginBottom:8}}>{timeline.total_events} events</div>
+              {(timeline.events||[]).slice(0,25).map((ev,i)=>(
+                <div key={i} style={{display:'flex',gap:8,padding:'5px 0',borderBottom:`1px solid ${t.border}1A`,fontFamily:'Space Mono,monospace',fontSize:10}}>
+                  <span style={{color:SEV[ev.severity]||t.textMuted,minWidth:6}}>●</span>
+                  <span style={{color:t.textDim,minWidth:46}}>{new Date(ev.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>
+                  <span style={{color:t.textMuted,lineHeight:1.5}}>{ev.description}</span>
+                </div>
+              ))}
+              {!(timeline.events?.length)&&<div style={{color:t.textDim,fontSize:11,padding:16,textAlign:'center'}}>No events in this window.</div>}
+            </div>
+          ):(
+            <div style={{color:t.textDim,fontSize:11,fontFamily:'Space Mono,monospace',textAlign:'center',paddingTop:40}}>Click LOAD to fetch timeline.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Navigation ───────────────────────────────────────────── */
+const PANELS=[
+  {id:'dashboard',label:'Dashboard',icon:'◈',Comp:PanelDashboard},
+  {id:'lab',label:'Decision Lab',icon:'◆',Comp:PanelDecisionLab},
+  {id:'policy',label:'Policies',icon:'◉',Comp:PanelPolicy},
+  {id:'operator',label:'Operator',icon:'◎',Comp:PanelOperator},
+  {id:'approvals',label:'Approvals',icon:'◫',Comp:PanelApprovals},
+  {id:'incidents',label:'Incidents',icon:'⚠',Comp:PanelIncidents},
+  {id:'canary',label:'Canary',icon:'◐',Comp:PanelCanary},
+  {id:'cost',label:'Cost & Infra',icon:'◌',Comp:PanelCostInfra},
+  {id:'audit',label:'Audit',icon:'◇',Comp:PanelAudit},
+];
+
+/* ── App Root ─────────────────────────────────────────────── */
+function App(){
+  const[dark,setDark]=useState(true);
+  const[panel,setPanel]=useState('dashboard');
+  const[auth,setAuth]=useState(null);
+  const[apiStatus,setApiStatus]=useState('checking');
+  const[apiUrl,setApiUrl]=useState(window.RTDE_API_URL||'http://localhost:8000');
+  const t=dark?D.dark:D.light;
+  const api=useMemo(()=>makeApi(apiUrl),[apiUrl]);
+
+  useEffect(()=>{const check=async()=>{const r=await api.get('/health');setApiStatus(r.error?'offline':'online');};check();const iv=setInterval(check,10000);return()=>clearInterval(iv);},[api]);
+
+  const PanelComp=PANELS.find(p=>p.id===panel)?.Comp||PanelDashboard;
+
+  const globalStyle=`
+    @keyframes xpulse{0%,100%{opacity:1}50%{opacity:.3}}
+    @keyframes xscan{0%{transform:translateX(-200%)}100%{transform:translateX(800%)}}
+    @keyframes xfade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes xslide{from{transform:translateX(12px);opacity:0}to{transform:translateX(0);opacity:1}}
+    input[type=range]{-webkit-appearance:none;appearance:none;height:4px;border-radius:2px;outline:none;cursor:pointer;}
+    input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;cursor:pointer;background:${t.blue};}
+    ::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-thumb{background:${t.border};border-radius:2px;}
+    input:focus,textarea:focus{border-color:${t.blue}!important;outline:none!important;}
+    *{box-sizing:border-box;}
+  `;
+
+  if(!auth) return(
+    <div>
+      <style>{globalStyle}</style>
+      <LoginScreen onLogin={setAuth} t={t} api={api}/>
+    </div>
+  );
+
+  return(
+    <AuthCtx.Provider value={auth}>
+      <div style={{display:'flex',minHeight:'100vh',background:t.bg,color:t.text,fontFamily:"'Syne',sans-serif"}}>
+        <style>{globalStyle}</style>
+
+        {/* Sidebar */}
+        <div style={{width:188,background:t.bg2,borderRight:`1px solid ${t.border}`,display:'flex',flexDirection:'column',flexShrink:0,position:'sticky',top:0,height:'100vh',overflowY:'auto'}}>
+          <div style={{padding:'22px 18px 18px',borderBottom:`1px solid ${t.border}`}}>
+            <div style={{fontSize:20,fontWeight:800,color:t.blue,letterSpacing:'0.04em',lineHeight:1}}>RTDE</div>
+            <div style={{fontSize:8,color:t.textMuted,letterSpacing:'0.22em',marginTop:3,fontFamily:'Space Mono,monospace'}}>XENON CONTROL v3</div>
+          </div>
+
+          {/* Session */}
+          <div style={{padding:'10px 18px',borderBottom:`1px solid ${t.border}`}}>
+            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+              <PulseDot color={apiStatus==='online'?t.green:apiStatus==='offline'?t.red:t.amber} size={6}/>
+              <span style={{fontSize:9,color:t.textMuted,fontFamily:'Space Mono,monospace'}}>API {apiStatus.toUpperCase()}</span>
+            </div>
+            <Badge label={`${auth.role.toUpperCase()}`} color={auth.role==='admin'?t.green:auth.role==='operator'?t.blue:t.textMuted}/>
+            <div style={{fontSize:9,color:t.textDim,fontFamily:'Space Mono,monospace',marginTop:4,overflow:'hidden',textOverflow:'ellipsis'}}>{auth.user_id}</div>
+          </div>
+
+          <nav style={{flex:1,paddingTop:8}}>
+            {PANELS.map(p=>{const active=panel===p.id;return(
+              <button key={p.id} onClick={()=>setPanel(p.id)} style={{width:'100%',padding:'10px 18px',background:active?`${t.blue}18`:'transparent',border:'none',borderLeft:`2px solid ${active?t.blue:'transparent'}`,color:active?t.blue:t.textMuted,cursor:'pointer',display:'flex',alignItems:'center',gap:10,fontSize:12,letterSpacing:'0.03em',textAlign:'left',transition:'all 0.15s'}}>
+                <span style={{fontSize:13,minWidth:16,textAlign:'center'}}>{p.icon}</span>
+                {p.label}
+                {p.id==='approvals'&&<span style={{marginLeft:'auto',fontSize:9,background:`${t.amber}33`,color:t.amber,padding:'1px 5px',fontFamily:'Space Mono,monospace'}}>!</span>}
+              </button>
+            );})}
+          </nav>
+
+          <div style={{padding:'10px 18px',borderTop:`1px solid ${t.border}`}}>
+            <div style={{fontSize:9,color:t.textDim,fontFamily:'Space Mono,monospace',letterSpacing:'0.1em',marginBottom:5}}>API URL</div>
+            <input value={apiUrl} onChange={e=>{setApiUrl(e.target.value);}} style={{width:'100%',background:t.bg3,border:`1px solid ${t.border}`,color:t.textMuted,padding:'4px 7px',fontSize:9,fontFamily:'Space Mono,monospace',outline:'none',boxSizing:'border-box'}}/>
+          </div>
+
+          <div style={{padding:'12px 18px',borderTop:`1px solid ${t.border}`,display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+            <span style={{fontSize:9,color:t.textMuted,fontFamily:'Space Mono,monospace',letterSpacing:'0.12em'}}>{dark?'DARK':'LIGHT'}</span>
+            <Toggle on={dark} onChange={setDark} colorOn={t.blue} t={t}/>
+          </div>
+          <div style={{padding:'8px 18px',borderTop:`1px solid ${t.border}`}}>
+            <XBtn onClick={()=>setAuth(null)} t={t} small full>SIGN OUT</XBtn>
+          </div>
+        </div>
+
+        {/* Main */}
+        <div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0,minHeight:'100vh'}}>
+          <div style={{padding:'14px 28px',borderBottom:`1px solid ${t.border}`,background:t.bg2,display:'flex',alignItems:'center',justifyContent:'space-between',position:'sticky',top:0,zIndex:10}}>
+            <div>
+              <div style={{fontSize:15,fontWeight:700,letterSpacing:'0.04em'}}>{PANELS.find(p=>p.id===panel)?.icon} {PANELS.find(p=>p.id===panel)?.label}</div>
+              <div style={{fontSize:9,color:t.textMuted,fontFamily:'Space Mono,monospace',marginTop:2,letterSpacing:'0.06em'}}>{new Date().toISOString().replace('T',' ').slice(0,19)} UTC</div>
+            </div>
+            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+              <Badge label="RTDE v3.0" color={t.blue}/>
+              <Badge label="PRODUCTION" color={t.green}/>
+            </div>
+          </div>
+          <div style={{height:2,background:t.bg3,position:'relative',overflow:'hidden'}}>
+            <div style={{position:'absolute',top:0,left:0,width:'20%',height:'100%',background:`linear-gradient(90deg,transparent,${t.blue}88,transparent)`,animation:'xscan 3.5s linear infinite'}}/>
+          </div>
+          <div style={{flex:1,padding:28,overflowY:'auto',animation:'xfade 0.25s ease'}} key={panel}>
+            <PanelComp t={t} api={api}/>
+          </div>
+        </div>
+      </div>
+    </AuthCtx.Provider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+# Render Platform Configuration — Free Tier Demo
+services:
+  - type: web
+    name: rtde-api
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python scripts/wait_for_db.py && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: development
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rtde-postgres
+          property: connectionString
+      # ⚠️  REDIS REQUIRED: Render free tier has no built-in Redis.
+      # Options:
+      #   1. Upstash Redis (free tier):  https://upstash.com
+      #      Set REDIS_URL to your Upstash connection string.
+      #   2. Railway Redis addon:         https://railway.app
+      #   3. Render Redis addon (paid):   https://render.com/docs/redis
+      #
+      # Without a real Redis URL, the following features fail silently:
+      #   kill switch, rate limiting, canary, cost tracking, idempotency.
+      #
+      # Replace the placeholder below with your real Redis URL:
+      - key: REDIS_URL
+        value: redis://REPLACE_WITH_UPSTASH_OR_RAILWAY_REDIS_URL/0
+      - key: CELERY_BROKER_URL
+        value: redis://REPLACE_WITH_UPSTASH_OR_RAILWAY_REDIS_URL/1
+      - key: CELERY_RESULT_BACKEND
+        value: redis://REPLACE_WITH_UPSTASH_OR_RAILWAY_REDIS_URL/2
+      - key: PYTHON_VERSION
+        value: "3.12"
+
+databases:
+  - name: rtde-postgres
+    plan: free
+    databaseName: rtde_db
+    user: rtde_user
