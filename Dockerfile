@@ -1,45 +1,54 @@
+```dockerfile
 # ══════════════════════════════════════════════════════════════════
-# RTDE — Multi-stage Dockerfile
-# Stage 1: builder  — installs all Python deps
-# Stage 2: runtime  — lean image, non-root user
+# RTDE — Production Dockerfile
 # ══════════════════════════════════════════════════════════════════
 
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
-ENV PYTHONPATH=/app
-# Build deps for asyncpg + psycopg2
+
+# Needed for asyncpg / psycopg2
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev && \
-    rm -rf /var/lib/apt/lists/*
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ──────────────────────────────────────────────────────────────────
 
 FROM python:3.12-slim AS runtime
 
-# Runtime deps: libpq for asyncpg, curl for healthcheck
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 curl && \
-    rm -rf /var/lib/apt/lists/*
-
-# Non-root user — security best practice
-RUN groupadd -r rtde && useradd -r -g rtde -u 1000 -m rtde
-
-# Copy installed packages from builder stage
-COPY --from=builder /install /usr/local
-
 WORKDIR /app
 
-# Copy app code
-COPY --chown=rtde:rtde . .
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
 
-USER rtde
+# Runtime deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed packages
+COPY --from=builder /install /usr/local
+
+# Copy source code
+COPY . /app
+
+# Create non-root user
+RUN groupadd -r rtde && useradd -r -g rtde -u 1000 -m rtde
+
+# Give permissions
+RUN chown -R rtde:rtde /app
 
 EXPOSE 8000
 
-# Default: run API server
-# Override via docker-compose command: for migrate, celery, etc.
-CMD cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000
+# Run migrations first, then start server
+CMD alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# Switch to non-root user AFTER setup
+USER rtde
