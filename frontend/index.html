@@ -5,14 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>RTDE — Xenon Control | ML Decision Engine</title>
 <script>
-  // RTDE Backend API URL
-  // Auto-detects: localhost → local dev | any other host → production Render URL
-  // Users can also change this live in the sidebar API URL input
-  (function() {
-    var host = window.location.hostname;
-    var isLocal = (host === 'localhost' || host === '127.0.0.1' || host === '');
-    window.RTDE_API_URL = window.RTDE_API_URL || (isLocal ? 'http://localhost:8000' : 'https://rtde-api.onrender.com');
-  })();
+  // RTDE Production Backend
+  window.RTDE_API_URL = "https://rtde-api.onrender.com";
 </script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -269,7 +263,7 @@ function PanelDashboard({t,api}){
 
   // WebSocket for live decisions
   useEffect(()=>{
-    const wsUrl=(window.RTDE_API_URL||'http://localhost:8000').replace(/^http/,'ws');
+    const wsUrl='wss://rtde-api.onrender.com/ws/decisions';
     try{
       const ws=new WebSocket(`${wsUrl}/ws/decisions`);
       ws.onmessage=e=>{
