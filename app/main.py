@@ -13,6 +13,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
 from app.core.config import get_settings
 from app.core.database import engine
 from app.core.error_handlers import register_exception_handlers
@@ -62,7 +66,16 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
     )
+    BASE_DIR = Path(__file__).resolve().parent.parent
 
+    frontend_path = BASE_DIR / "frontend"
+
+    app.mount("/frontend", StaticFiles(directory=frontend_path), name="frontend")
+
+
+    @app.get("/")
+    async def serve_frontend():
+        return FileResponse(frontend_path / "index.html")
     # CORS — open for demo (frontend on Vercel)
     app.add_middleware(
         CORSMiddleware,
