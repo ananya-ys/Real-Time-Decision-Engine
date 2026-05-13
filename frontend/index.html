@@ -192,16 +192,25 @@ function LoginScreen({onLogin,t,api}){
   const[err,setErr]=useState('');
 
   const login=async()=>{
-    if(!user.trim()){setErr('Username required');return;}
-    setLoading(true);setErr('');
-    const r=await api.post('/api/v1/auth/token',{username:user,password:pass||'dev',role});
-    if(r.error||!r.access_token){
-      setErr(r.error||r.detail||'Login failed');setLoading(false);return;
-    }
-    onLogin({token:r.access_token,role:r.role||role,user_id:user});
-    setLoading(false);
-  };
+  if(!user.trim()){
+    setErr('Username required');
+    return;
+  }
 
+  setLoading(true);
+  setErr('');
+
+  // DEV MODE LOGIN BYPASS
+  setTimeout(()=>{
+    onLogin({
+      token:'dev-token',
+      role:role,
+      user_id:user
+    });
+
+    setLoading(false);
+  },500);
+};
   const roles=['viewer','operator','admin'];
   const roleDesc={viewer:'Read-only access to all dashboards',operator:'Full control + operator commands',admin:'Promotion approval + RBAC management'};
 
@@ -263,7 +272,7 @@ function PanelDashboard({t,api}){
 
   // WebSocket for live decisions
   useEffect(()=>{
-    const wsUrl='wss://rtde-api.onrender.com/ws/decisions';
+    const ws=new WebSocket('wss://rtde-api.onrender.com/ws/decisions');
     try{
       const ws=new WebSocket(`${wsUrl}/ws/decisions`);
       ws.onmessage=e=>{
