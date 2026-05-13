@@ -42,4 +42,4 @@ EXPOSE 8000
 
 # Default: run API server
 # Override via docker-compose command: for migrate, celery, etc.
-CMD alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000
+CMD cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000
