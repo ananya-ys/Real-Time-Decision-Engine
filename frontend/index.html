@@ -271,19 +271,36 @@ function PanelDashboard({t,api}){
   const wsRef=useRef(null);
 
   // WebSocket for live decisions
-  useEffect(()=>{
-    const ws=new WebSocket('wss://rtde-api.onrender.com/ws/decisions');
-    try{
-      const ws=new WebSocket(`${wsUrl}/ws/decisions`);
-      ws.onmessage=e=>{
-        const d=JSON.parse(e.data);
-        if(d.type==='decision') setDecisions(p=>[d,...p].slice(0,10));
+  useEffect(() => {
+    try {
+      const base = window.RTDE_API_URL
+        .replace("https://", "wss://")
+        .replace("http://", "ws://");
+
+      const ws = new WebSocket(`${base}/ws/decisions`);
+
+      ws.onmessage = (e) => {
+        const d = JSON.parse(e.data);
+        if (d.type === "decision") {
+          setDecisions((p) => [d, ...p].slice(0, 10));
+        }
       };
-      ws.onerror=()=>{};
-      wsRef.current=ws;
-    }catch(e){}
-    return()=>{if(wsRef.current)wsRef.current.close();};
-  },[]);
+
+      ws.onerror = () => {
+      console.log("WebSocket connection failed");
+      };
+
+      wsRef.current = ws;
+    } catch (e) {
+      console.log("WS error", e);
+    }
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, []);
 
   // Poll dashboard
   useEffect(()=>{
